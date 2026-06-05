@@ -207,6 +207,8 @@ def is_valid_excel(filepath: Path) -> bool:
 # ── 파일 탐색 ─────────────────────────────────────────────────────────────
 def _glob_excel(folder: Path) -> list:
     """xls/xlsx (대소문자 무관) 탐색 (수정시간 내림차순)"""
+    if not folder.exists():
+        return []
     files = [f for f in folder.iterdir()
              if f.is_file() and f.suffix.lower() in ('.xlsx', '.xls')]
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
@@ -242,15 +244,31 @@ def _find_all_year_months() -> list:
                     ym_set.add(ym)
     return sorted(ym_set)
 
+def _base_stem(stem: str) -> str:
+    """'파일명_235542' → '파일명'  (_HHMMSS 충돌 접미사 제거)"""
+    if len(stem) > 7 and stem[-7] == '_' and stem[-6:].isdigit():
+        return stem[:-7]
+    return stem
+
 def _collect_weekly_files(year: int, month: int) -> list:
-    """data/weekly/ 에서 같은 달 파일 전부 수집 (오래된 순) — _done/ 제외"""
+    """
+    data/weekly/ + _done/YYYY-MM/ 에서 같은 달 파일 전부 수집 (오래된 순).
+    _HHMMSS 타임스탬프 중복 파일은 최신 1개만 유지.
+    """
     _, get_ym, _ = _get_process()
     all_files = []
-    if DATA_WEEKLY.exists():
-        for f in sorted(_glob_excel(DATA_WEEKLY), key=lambda p: p.stat().st_mtime):
+    for search_dir in [DATA_WEEKLY, DATA_WEEKLY / '_done' / f'{year}-{month:02d}']:
+        for f in _glob_excel(search_dir):  # 폴더 없으면 빈 list 반환
             if is_valid_excel(f) and get_ym(f) == (year, month):
                 all_files.append(f)
-    return all_files
+    all_files.sort(key=lambda p: p.stat().st_mtime)
+
+    # 베이스명 기준 중복 제거 — 최신 파일만 유지
+    stem_to_file: dict = {}
+    for f in all_files:
+        base = _base_stem(f.stem).lower()
+        stem_to_file[base] = f  # 오래된 순 순회하므로 마지막(최신)이 남음
+    return sorted(stem_to_file.values(), key=lambda p: p.stat().st_mtime)
 
 # ── 날짜 판단 ─────────────────────────────────────────────────────────────
 def _get_today_mode(today: datetime.date) -> Optional[str]:
@@ -421,8 +439,11 @@ def _run_weekly(year: int, month: int, processed: Set[str], mark: bool = True) -
 
     ok = _save_outputs(data, counterpart=counterpart)
     if ok and mark:
-        _mark_processed(new_fp)
-        _move_to_done(new_fp)
+        # weekly/ 에 있는 파일만 _done/ 으로 이동 (_done/ 파일은 이미 보관됨)
+        for fp in all_files:
+            if fp.parent == DATA_WEEKLY:
+                _mark_processed(fp)
+                _move_to_done(fp)
 
 def _run_monthly(year: int, month: int, processed: Set[str], mark: bool = True) -> None:
     log.info(f"=== 월별 집계 {year}-{month:02d} ===")
@@ -437,19 +458,13 @@ def _run_monthly(year: int, month: int, processed: Set[str], mark: bool = True) 
     # 정합성 검증용 주별 합산 데이터 수집 (weekly/ + _done/ 전체)
     counterpart_data = None
     if fp.parent == DATA_MONTHLY:
-        _, get_ym, load_merge = _get_process()
-        all_weekly = []
-        for search_dir in [DATA_WEEKLY,
-                           DATA_WEEKLY / '_done' / f'{year}-{month:02d}']:
-            if search_dir.exists():
-                for f in _glob_excel(search_dir):
-                    if is_valid_excel(f) and get_ym(f) == (year, month):
-                        all_weekly.append(f)
+        load_and_process, get_ym, load_merge = _get_process()
+        all_weekly = _collect_weekly_files(year, month)
         if all_weekly:
             try:
                 counterpart_data = load_merge(all_weekly) \
                                    if len(all_weekly) > 1 \
-                                   else _get_process()[0](all_weekly[0])
+                                   else load_and_process(all_weekly[0])
                 log.info(f"정합성 검증용 주별 파일 {len(all_weekly)}개 합산")
             except Exception as e:
                 log.warning(f"주별 데이터 로드 실패 — 정합성 검증 스킵: {e}")
