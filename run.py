@@ -410,7 +410,7 @@ def _run_weekly(year: int, month: int, processed: Set[str], mark: bool = True) -
         all_files = [new_fp]
 
     counterpart = _find_any_for_month(DATA_MONTHLY, year, month)
-    load_and_process, _, load_and_merge = _get_process()
+    load_and_process, get_ym, load_and_merge = _get_process()
 
     log.info(f"주별 파일 {len(all_files)}개 합산: {[f.name for f in all_files]}"
              if len(all_files) > 1 else f"주별 파일: {all_files[0].name}")
@@ -439,11 +439,13 @@ def _run_weekly(year: int, month: int, processed: Set[str], mark: bool = True) -
 
     ok = _save_outputs(data, counterpart=counterpart)
     if ok and mark:
-        # weekly/ 에 있는 파일만 _done/ 으로 이동 (_done/ 파일은 이미 보관됨)
-        for fp in all_files:
-            if fp.parent == DATA_WEEKLY:
-                _mark_processed(fp)
-                _move_to_done(fp)
+        # all_files 기반 대신 DATA_WEEKLY 직접 스캔:
+        # mtime 역전 등으로 all_files에서 누락된 파일도 빠짐없이 이동
+        for f in list(_glob_excel(DATA_WEEKLY)):
+            ym = get_ym(f)
+            if ym and ym == (year, month):
+                _mark_processed(f)
+                _move_to_done(f)
 
 def _run_monthly(year: int, month: int, processed: Set[str], mark: bool = True) -> None:
     log.info(f"=== 월별 집계 {year}-{month:02d} ===")
