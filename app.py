@@ -304,6 +304,8 @@ class PTApp:
 
         # 파일 존재 확인 (대소문자 무관: .xls/.XLS/.xlsx/.XLSX 모두 인식)
         def _ls_excel(d: Path):
+            if not d.exists():
+                return []
             return [f for f in d.iterdir()
                     if f.is_file() and f.suffix.lower() in ('.xlsx', '.xls')
                     and f.stat().st_size > 1024]

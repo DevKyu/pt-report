@@ -73,7 +73,7 @@ def validate(weekly_data: Dict[str, Any], monthly_data: Dict[str, Any]) -> Dict[
                     '차이':      diff,
                 })
 
-    ok = all(r['차이'] == 0 for r in summary_rows)
+    ok = bool(summary_rows) and all(r['차이'] == 0 for r in summary_rows)
 
     return {
         'ok':             ok,

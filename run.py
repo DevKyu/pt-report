@@ -263,11 +263,12 @@ def _collect_weekly_files(year: int, month: int) -> list:
                 all_files.append(f)
     all_files.sort(key=lambda p: p.stat().st_mtime)
 
-    # 베이스명 기준 중복 제거 — 최신 파일만 유지
+    # 베이스명 기준 중복 제거 — DATA_WEEKLY 파일 우선, 없으면 최신 파일
     stem_to_file: dict = {}
     for f in all_files:
         base = _base_stem(f.stem).lower()
-        stem_to_file[base] = f  # 오래된 순 순회하므로 마지막(최신)이 남음
+        if base not in stem_to_file or f.parent == DATA_WEEKLY:
+            stem_to_file[base] = f
     return sorted(stem_to_file.values(), key=lambda p: p.stat().st_mtime)
 
 # ── 날짜 판단 ─────────────────────────────────────────────────────────────
