@@ -86,7 +86,7 @@ def get_output_dirs(year: int, month: int) -> Tuple[Path, Path]:
     return reports, dashboard
 
 def _move_to_done(filepath: Path) -> None:
-    """처리 완료 파일을 data/_done/YYYY-MM/ 으로 이동 (원본 보존)"""
+    """처리 완료 파일을 data/_done/YYYY-MM/ 으로 이동"""
     try:
         import shutil
         from process import get_file_year_month
@@ -98,6 +98,11 @@ def _move_to_done(filepath: Path) -> None:
         done_dir.mkdir(parents=True, exist_ok=True)
         dest = done_dir / filepath.name
         if dest.exists():
+            if dest.stat().st_size == filepath.stat().st_size:
+                # 동일 파일이 이미 _done에 존재 → 소스 삭제 (타임스탬프 복사본 생성 안 함)
+                filepath.unlink()
+                log.info(f"중복 파일 제거 (이미 _done에 존재): {filepath.name}")
+                return
             stamp = datetime.datetime.now().strftime('%H%M%S')
             dest  = done_dir / f"{filepath.stem}_{stamp}{filepath.suffix}"
         shutil.move(str(filepath), str(dest))
@@ -238,14 +243,13 @@ def _find_all_year_months() -> list:
     return sorted(ym_set)
 
 def _collect_weekly_files(year: int, month: int) -> list:
-    """data/weekly/ + _done/YYYY-MM/ 에서 같은 달 파일 전부 수집 (오래된 순)"""
+    """data/weekly/ 에서 같은 달 파일 전부 수집 (오래된 순) — _done/ 제외"""
     _, get_ym, _ = _get_process()
     all_files = []
-    for search_dir in [DATA_WEEKLY, DATA_WEEKLY / '_done' / f'{year}-{month:02d}']:
-        if search_dir.exists():
-            for f in sorted(_glob_excel(search_dir), key=lambda p: p.stat().st_mtime):
-                if is_valid_excel(f) and get_ym(f) == (year, month):
-                    all_files.append(f)
+    if DATA_WEEKLY.exists():
+        for f in sorted(_glob_excel(DATA_WEEKLY), key=lambda p: p.stat().st_mtime):
+            if is_valid_excel(f) and get_ym(f) == (year, month):
+                all_files.append(f)
     return all_files
 
 # ── 날짜 판단 ─────────────────────────────────────────────────────────────
