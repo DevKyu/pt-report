@@ -1,0 +1,33 @@
+# ── 런타임 생성 파일 ──────────────────────────────────────────────────────
+run.log
+run.log.*
+processed.log
+
+# ── 데이터 / 결과물 (환자 데이터 포함 가능, 절대 커밋 금지) ──────────────
+data/weekly/*.xlsx
+data/weekly/*.xls
+data/weekly/_done/
+data/monthly/*.xlsx
+data/monthly/*.xls
+data/monthly/_done/
+output/
+
+# ── 빌드 산출물 ───────────────────────────────────────────────────────────
+dist/
+build_tmp/
+*.spec
+
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ── OS / 에디터 ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
