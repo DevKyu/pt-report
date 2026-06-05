@@ -274,6 +274,7 @@ def _get_target_ym(today: datetime.date, mode: str) -> Tuple[int, int]:
 def _save_outputs(
     data: dict,
     counterpart: Optional[Path] = None,
+    counterpart_data: Optional[dict] = None,
 ) -> bool:
     """처리된 데이터를 받아 Excel + HTML 생성 및 archive 정리"""
     generate_excel, generate_html = _get_generators()
@@ -283,21 +284,32 @@ def _save_outputs(
 
     year, month = data['year_month']
     period      = data['period']
-    stamp       = datetime.datetime.now().strftime('%Y%m%d_%H%M')
+    stamp       = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 
     reports_dir, dashboard_dir = get_output_dirs(year, month)
     excel_path = reports_dir   / f"집계리포트_{period}_{stamp}.xlsx"
     html_path  = dashboard_dir / f"대시보드_{period}_{stamp}.html"
 
     # 정합성 검증
+    # counterpart_data: 이미 로드/합산된 dict (월별 검증 시 주별 합산 데이터)
+    # counterpart: 단일 파일 Path (주별 검증 시 월별 파일)
     validation_result = None
-    if counterpart and is_valid_excel(counterpart):
+    other_data = counterpart_data  # 미리 전달된 경우 우선 사용
+    if other_data is None and counterpart and is_valid_excel(counterpart):
         try:
             load_fn, _, _ = _get_process()
             other_data = load_fn(counterpart)
+        except Exception as e:
+            log.warning(f"정합성 검증 실패 (리포트는 생성 계속): {e}")
+
+    if other_data is not None:
+        try:
             if other_data['year_month'] == (year, month):
                 from validator import validate
-                if counterpart.parent == DATA_MONTHLY:
+                # counterpart_data 전달 시 other=주별, data=월별
+                is_monthly_counterpart = (counterpart is not None and
+                                          counterpart.parent == DATA_MONTHLY)
+                if is_monthly_counterpart:
                     validation_result = validate(data, other_data)
                 else:
                     validation_result = validate(other_data, data)
@@ -326,13 +338,15 @@ def process_file(
     filepath: Path,
     mark: bool = True,
     counterpart: Optional[Path] = None,
+    counterpart_data: Optional[dict] = None,
     retry: bool = True,
 ) -> bool:
     """
-    filepath:    처리할 파일
-    mark:        완료 기록 여부
-    counterpart: 정합성 비교 파일
-    retry:       파일 잠김 시 30분 후 1회 재시도
+    filepath:         처리할 파일
+    mark:             완료 기록 여부
+    counterpart:      정합성 비교 단일 파일 (주별 실행 시 월별 파일)
+    counterpart_data: 정합성 비교 pre-loaded dict (월별 실행 시 주별 합산 데이터)
+    retry:            파일 잠김 시 30분 후 1회 재시도
     """
     load_and_process, _, _ = _get_process()
     log.info(f"처리 시작: {filepath.name}")
@@ -358,7 +372,7 @@ def process_file(
     else:
         return False
 
-    ok = _save_outputs(data, counterpart=counterpart)
+    ok = _save_outputs(data, counterpart=counterpart, counterpart_data=counterpart_data)
     if ok and mark:
         _mark_processed(filepath)
         _move_to_done(filepath)
@@ -419,9 +433,28 @@ def _run_monthly(year: int, month: int, processed: Set[str], mark: bool = True) 
     if not fp:
         log.info("처리할 파일 없음")
         return
-    counterpart = _find_any_for_month(DATA_WEEKLY, year, month) \
-                  if fp.parent == DATA_MONTHLY else None
-    process_file(fp, mark=mark, counterpart=counterpart)
+
+    # 정합성 검증용 주별 합산 데이터 수집 (weekly/ + _done/ 전체)
+    counterpart_data = None
+    if fp.parent == DATA_MONTHLY:
+        _, get_ym, load_merge = _get_process()
+        all_weekly = []
+        for search_dir in [DATA_WEEKLY,
+                           DATA_WEEKLY / '_done' / f'{year}-{month:02d}']:
+            if search_dir.exists():
+                for f in _glob_excel(search_dir):
+                    if is_valid_excel(f) and get_ym(f) == (year, month):
+                        all_weekly.append(f)
+        if all_weekly:
+            try:
+                counterpart_data = load_merge(all_weekly) \
+                                   if len(all_weekly) > 1 \
+                                   else _get_process()[0](all_weekly[0])
+                log.info(f"정합성 검증용 주별 파일 {len(all_weekly)}개 합산")
+            except Exception as e:
+                log.warning(f"주별 데이터 로드 실패 — 정합성 검증 스킵: {e}")
+
+    process_file(fp, mark=mark, counterpart_data=counterpart_data)
 
 # ── 자동 실행 ─────────────────────────────────────────────────────────────
 def run_auto(force: bool = False) -> None:
