@@ -470,8 +470,8 @@ class PTApp:
         vbs_ps  = str(vbs).replace("'", "''")
         exe_ps  = str(ROOT / 'ptreport.exe').replace("'", "''")
         work_ps = str(ROOT).replace("'", "''")
-        # 이미 등록된 경우 스킵, 미등록이면 등록 — PowerShell 1회 호출
-        ps_script = f"""if (Get-ScheduledTask -TaskName 'PT_Weekly' -ErrorAction SilentlyContinue) {{ exit 0 }}
+        # 이미 등록: exit 2(조용히 종료) / 신규 등록: exit 0 / 실패: non-zero
+        ps_script = f"""if (Get-ScheduledTask -TaskName 'PT_Weekly' -ErrorAction SilentlyContinue) {{ exit 2 }}
 {unregister}
 $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"' + '{vbs_ps}' + '"')
 $twk = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At '12:00'
@@ -499,9 +499,13 @@ $sc.Save()
                 capture_output=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            ok = result.returncode == 0
-            if ok:
+            rc = result.returncode
+            if rc == 0:
                 self._q.put(('log', 'ok', '✓ 스케줄 등록 완료'))
+            elif rc == 2:
+                pass  # 이미 등록됨 — 로그 출력 안 함
+            else:
+                self._q.put(('log', 'warn', f'⚠ 스케줄 등록 실패 (code {rc})'))
         except Exception as e:
             self._q.put(('log', 'err', f'스케줄 등록 오류: {e}'))
         finally:
@@ -509,8 +513,6 @@ $sc.Save()
                 ps_file.unlink()
             except Exception:
                 pass
-        if not ok:
-            self._q.put(('log', 'warn', '⚠ 스케줄 등록 실패'))
 
     def run(self):
         self._logwrite(

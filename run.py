@@ -332,9 +332,15 @@ def _save_outputs(
                     validation_result = validate(data, other_data)
                 else:
                     validation_result = validate(other_data, data)
-                status = '✓ 일치' if validation_result['ok'] else \
-                         f"⚠ 불일치 {len(validation_result['detail'])}건"
-                log.info(f"정합성 검증: {status}")
+                if validation_result['ok']:
+                    log.info("정합성 검증: ✓ 일치")
+                else:
+                    n = len(validation_result['detail'])
+                    log.warning(
+                        f"정합성 검증: ⚠ 불일치 {n}건 "
+                        f"— 월별 파일과 주별 누적 데이터가 다릅니다. "
+                        f"월별 파일을 확인하세요."
+                    )
             else:
                 log.info("정합성 검증 스킵 (연월 불일치)")
         except Exception as e:
@@ -451,17 +457,31 @@ def _run_weekly(year: int, month: int, processed: Set[str], mark: bool = True) -
 def _run_monthly(year: int, month: int, processed: Set[str], mark: bool = True) -> None:
     log.info(f"=== 월별 집계 {year}-{month:02d} ===")
     fp = _find_latest_for_month(DATA_MONTHLY, year, month, processed)
+
     if not fp:
-        log.info("data/monthly/ 파일 없음 → data/weekly/ 최신 파일로 대체")
-        fp = _find_latest_for_month(DATA_WEEKLY, year, month, processed)
-    if not fp:
+        # data/monthly/ 파일 없음 → weekly/ + _done/ 누적 데이터로 대체
+        all_weekly = _collect_weekly_files(year, month)
+        if all_weekly:
+            log.info(
+                f"data/monthly/ 파일 없음 "
+                f"→ 주별 누적 {len(all_weekly)}개 파일로 월별 집계 대체"
+            )
+            load_and_process, _, load_merge = _get_process()
+            try:
+                data = load_merge(all_weekly) if len(all_weekly) > 1 \
+                       else load_and_process(all_weekly[0])
+                _save_outputs(data)  # 파일 이동 없음 (이미 _done/에 보관됨)
+            except Exception as e:
+                log.error(f"주별 누적 집계 실패: {e}")
+                log.debug(traceback.format_exc())
+            return
         log.info("처리할 파일 없음")
         return
 
-    # 정합성 검증용 주별 합산 데이터 수집 (weekly/ + _done/ 전체)
+    # data/monthly/ 파일 있음 → 정상 처리 + 주별 누적과 정합성 검증
     counterpart_data = None
     if fp.parent == DATA_MONTHLY:
-        load_and_process, get_ym, load_merge = _get_process()
+        load_and_process, _, load_merge = _get_process()
         all_weekly = _collect_weekly_files(year, month)
         if all_weekly:
             try:
