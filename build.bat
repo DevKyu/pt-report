@@ -11,20 +11,24 @@ echo  PT Report - EXE Build
 echo ========================================
 echo.
 
-echo [1/3] Checking PyInstaller...
+echo [1/4] Installing dependencies...
+python -m pip install --quiet --upgrade pandas openpyxl xlrd apscheduler workalendar
+if %errorLevel% neq 0 (
+    echo ERROR: pip install failed. Check internet connection.
+    pause & exit /b 1
+)
 python -m PyInstaller --version >nul 2>&1
 if %errorLevel% neq 0 (
-    echo Installing PyInstaller...
     python -m pip install pyinstaller --quiet
     if %errorLevel% neq 0 (
-        echo ERROR: pip install failed.
+        echo ERROR: PyInstaller install failed.
         pause & exit /b 1
     )
 )
 echo Done.
 echo.
 
-echo [2/3] Building exe... (1-3 min)
+echo [2/4] Building exe... (1-3 min)
 python -m PyInstaller ^
     --onefile ^
     --windowed ^
@@ -59,7 +63,7 @@ if %errorLevel% neq 0 (
 echo Done.
 echo.
 
-echo [3/3] Setting up dist folder...
+echo [3/4] Setting up dist folder...
 if not exist "%DIST%\data\weekly"  mkdir "%DIST%\data\weekly"
 if not exist "%DIST%\data\monthly" mkdir "%DIST%\data\monthly"
 if not exist "%DIST%\output"       mkdir "%DIST%\output"
@@ -71,6 +75,8 @@ echo.
 
 rd /s /q "%DIR%\build_tmp" >nul 2>&1
 
+echo [4/4] Done.
+echo.
 echo ========================================
 echo  Build complete!
 echo  Output: dist\pt_report_dist\
