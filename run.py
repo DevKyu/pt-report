@@ -150,8 +150,6 @@ def _is_already_processed(filepath: Path, processed: Set[str]) -> bool:
         key = f"{filepath.resolve()}|{mtime}"
         if key in processed:
             return True
-        if str(filepath.resolve()) in processed:
-            return True
     except Exception:
         pass
     return False
@@ -203,8 +201,9 @@ def is_valid_excel(filepath: Path) -> bool:
 
 # ── 파일 탐색 ─────────────────────────────────────────────────────────────
 def _glob_excel(folder: Path) -> list:
-    """xls + xlsx 모두 탐색 (수정시간 내림차순)"""
-    files = list(folder.glob('*.xlsx')) + list(folder.glob('*.xls'))
+    """xls/xlsx (대소문자 무관) 탐색 (수정시간 내림차순)"""
+    files = [f for f in folder.iterdir()
+             if f.is_file() and f.suffix.lower() in ('.xlsx', '.xls')]
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 def _find_latest_for_month(

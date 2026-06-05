@@ -302,14 +302,16 @@ class PTApp:
             messagebox.showinfo('알림', '현재 처리 중입니다.')
             return
 
-        # 파일 존재 확인
+        # 파일 존재 확인 (대소문자 무관: .xls/.XLS/.xlsx/.XLSX 모두 인식)
+        def _ls_excel(d: Path):
+            return [f for f in d.iterdir()
+                    if f.is_file() and f.suffix.lower() in ('.xlsx', '.xls')
+                    and f.stat().st_size > 1024]
+
         folder = ROOT / 'data' / ('weekly' if mode == 'weekly' else 'monthly')
-        xlsx = [f for f in list(folder.glob('*.xlsx'))+list(folder.glob('*.xls'))
-                if f.stat().st_size > 1024]
+        xlsx = _ls_excel(folder)
         if not xlsx and mode == 'monthly':
-            xlsx = [f for f in list((ROOT/'data'/'weekly').glob('*.xlsx')) +
-                                list((ROOT/'data'/'weekly').glob('*.xls'))
-                    if f.stat().st_size > 1024]
+            xlsx = _ls_excel(ROOT / 'data' / 'weekly')
         if not xlsx:
             lbl.config(text='⚠ 처리할 파일 없음', fg=C['error'])
             messagebox.showwarning('파일 없음',
@@ -447,19 +449,10 @@ class PTApp:
     # ── 스케줄러 자동 등록 (첫 실행 시) ──────────────────────────────────
     def _auto_register(self):
         """
-        스케줄러 등록 여부 확인 (PowerShell — schtasks 대비 로케일 무관)
-        - 미등록: 신규 등록
-        - 등록됨: 스킵
+        스케줄러 등록 여부 확인 후 미등록이면 등록 — PowerShell 1회 호출로 처리.
+        창이 뜨지 않도록 CREATE_NO_WINDOW 플래그 사용.
         """
-        r = subprocess.run(
-            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-             "if (Get-ScheduledTask -TaskName 'PT_Weekly' -ErrorAction SilentlyContinue)"
-             " { exit 0 } else { exit 1 }"],
-            capture_output=True
-        )
-        if r.returncode != 0:
-            self._logwrite('첫 실행 — 스케줄러 등록 중...', 'info')
-            self._do_register()
+        self._do_register()
 
     def _do_register(self):
         vbs = ROOT / 'run_silent.vbs'
@@ -471,17 +464,16 @@ class PTApp:
             'PT_Monthly_10', 'PT_Monthly_12', 'PT_Monthly_15', 'PT_Monthly_18',
             'PT_Monthly_10B', 'PT_Monthly_12B', 'PT_Monthly_15B', 'PT_Monthly_18B',
         ]
-        # PowerShell로 등록
-        # - DaysOfWeek enum: 로케일 무관
-        # - RunLevel Limited: 일반 사용자도 등록 가능, 데이터 처리에 관리자 권한 불필요
         unregister = '\n'.join(
             f"Unregister-ScheduledTask -TaskName '{n}' -Confirm:$false -ErrorAction SilentlyContinue"
             for n in old_names
         )
-        vbs_ps = str(vbs).replace("'", "''")   # PS 단일 인용 이스케이프
+        vbs_ps  = str(vbs).replace("'", "''")
         exe_ps  = str(ROOT / 'ptreport.exe').replace("'", "''")
         work_ps = str(ROOT).replace("'", "''")
-        ps_script = f"""{unregister}
+        # 이미 등록된 경우 스킵, 미등록이면 등록 — PowerShell 1회 호출
+        ps_script = f"""if (Get-ScheduledTask -TaskName 'PT_Weekly' -ErrorAction SilentlyContinue) {{ exit 0 }}
+{unregister}
 $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"' + '{vbs_ps}' + '"')
 $twk = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At '12:00'
 $tmo = New-ScheduledTaskTrigger -Monthly -DaysOfMonth 1 -At '12:00'
@@ -497,18 +489,20 @@ $sc.Description = 'PT Report - 물리치료 집계 자동화'
 $sc.Save()
 """
         tmp_dir = Path(os.environ.get('TEMP') or os.environ.get('TMP') or str(Path.home()))
-        # PID 포함 — 동시 실행 시 파일 충돌 방지
         ps_file = tmp_dir / f'pt_sched_{os.getpid()}.ps1'
         ok = False
         try:
-            # utf-8-sig(BOM) — PowerShell 5 에서 UTF-8 인식 보장
             ps_file.write_text(ps_script, encoding='utf-8-sig')
+            # CREATE_NO_WINDOW: windowed 앱에서 PowerShell 콘솔 창이 뜨지 않도록 억제
             result = subprocess.run(
                 ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                  '-File', str(ps_file)],
-                capture_output=True
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             ok = result.returncode == 0
+            if ok:
+                self._logwrite('✓ 스케줄 등록 완료', 'ok')
         except Exception as e:
             self._logwrite(f'스케줄 등록 오류: {e}', 'err')
         finally:
@@ -516,8 +510,8 @@ $sc.Save()
                 ps_file.unlink()
             except Exception:
                 pass
-        msg = '✓ 스케줄 등록 완료' if ok else '⚠ 스케줄 등록 실패'
-        self._logwrite(msg, 'ok' if ok else 'warn')
+        if not ok:
+            self._logwrite('⚠ 스케줄 등록 실패', 'warn')
 
     def run(self):
         self._logwrite(

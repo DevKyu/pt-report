@@ -49,6 +49,9 @@ pt_report/
 - **공휴일**: `workalendar` 라이브러리로 자동 계산 (없으면 고정 공휴일 fallback)
 - **근로자의날(5/1)**: workalendar에 포함되지 않아 `get_holidays()`에서 별도 추가
 - **엑셀 엔진**: `.xls` → `xlrd`, `.xlsx` → `openpyxl` (모든 읽기 함수에서 명시적 지정)
+- **파일 탐색**: `run.py`의 `_glob_excel()`은 `glob()` 대신 `iterdir() + suffix.lower()`로 구현 — Python 3.12+ 에서 `glob('*.xls')`가 대소문자 구별하는 문제 방지 (`.XLS`, `.XLSX` 모두 인식)
+- **Excel 시트명**: 처방의별 탭은 `doc[:31]`로 truncate — Excel 31자 제한 대응
+- **HTML CDN 의존성**: Chart.js(`cdnjs.cloudflare.com`)와 Google Fonts를 외부 CDN에서 로드. 인터넷 미연결 환경에서는 차트 미표시·폰트 fallback
 
 ## 자동 실행 스케줄
 | 구분 | 시각 | 태스크명 |
@@ -57,6 +60,12 @@ pt_report/
 | 월별 | 매월 1일 12:00 | `PT_Monthly` |
 
 스케줄 등록은 `Register-ScheduledTask` PowerShell cmdlet 사용 (로케일 무관).
+
+**스케줄 자동 등록 동작 (app.py)**
+- 앱 시작 0.9초 후 `_auto_register()` → `_do_register()` 호출
+- PS1 스크립트 내에서 "이미 등록 여부 확인 + 미등록 시 등록"을 **1회 PowerShell 호출**로 처리
+- `subprocess.CREATE_NO_WINDOW` 플래그로 콘솔 창 완전 숨김
+- 이미 등록된 경우 PS1이 즉시 `exit 0`으로 종료 (빠름)
 
 **실행 흐름 (배포 exe 기준)**
 ```
@@ -110,3 +119,8 @@ python run.py --schedule
 - `.bat` 파일: ASCII(영문)만 사용 — cmd.exe CP949 환경과 충돌 방지
 - `run.py` 실행 시 `sys.stdout/stderr.reconfigure(encoding='utf-8')` 선언
 - PS1 임시 파일: `utf-8-sig`(BOM) — PowerShell 5 UTF-8 인식 보장
+
+## PyInstaller 빌드 참고
+- `build.bat` 실행 시 `ERROR: Hidden import 'process' not found` 등 4개 오류 → `--add-data scripts;scripts` + `app.py`의 `sys.path.insert(BUNDLE/'scripts')` 조합으로 런타임에서 정상 동작하므로 무시해도 됨
+- `WARNING: Hidden import "jinja2" not found!` → jinja2 미사용, 무시
+- `WARNING: Failed to collect submodules for 'workalendar.tests'` → 테스트 모듈만 누락, 기능 영향 없음

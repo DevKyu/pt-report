@@ -205,7 +205,7 @@ def generate_excel(data: dict, output_path: Union[str, Path], validation_result:
 
     # ── 시트4~: 처방의별 ───────────────────────────────────────────────
     for doc in docs:
-        ws_d = wb.create_sheet(doc)
+        ws_d = wb.create_sheet(doc[:31])  # Excel 시트명 최대 31자
         ws_d.sheet_view.showGridLines = False
         title_cell(ws_d, 1, 6, f"{doc} — 일별 / 주별 집계")
         ws_d.row_dimensions[2].height = 6
