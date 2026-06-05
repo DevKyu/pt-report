@@ -23,7 +23,6 @@ import time
 from pathlib import Path
 from typing import Optional, Set, Tuple
 
-# Windows cmd.exe 환경에서 한글 로그가 깨지지 않도록 UTF-8 강제
 for _stream in (sys.stdout, sys.stderr):
     if _stream and hasattr(_stream, 'reconfigure'):
         try:
@@ -98,7 +97,6 @@ def _move_to_done(filepath: Path) -> None:
             done_dir = filepath.parent / '_done'
         done_dir.mkdir(parents=True, exist_ok=True)
         dest = done_dir / filepath.name
-        # 같은 이름 파일이 이미 있으면 타임스탬프 붙여서 저장
         if dest.exists():
             stamp = datetime.datetime.now().strftime('%H%M%S')
             dest  = done_dir / f"{filepath.stem}_{stamp}{filepath.suffix}"
@@ -109,9 +107,7 @@ def _move_to_done(filepath: Path) -> None:
 
 
 def _cleanup_old_outputs(reports_dir: Path, dashboard_dir: Path) -> None:
-    """
-    같은 기간 이전 결과물을 _archive/ 로 이동 (최신 1개만 유지)
-    """
+    """같은 기간 이전 결과물을 _archive/ 로 이동 (최신 1개만 유지)"""
     archive_r = reports_dir   / '_archive'
     archive_d = dashboard_dir / '_archive'
 
@@ -125,7 +121,7 @@ def _cleanup_old_outputs(reports_dir: Path, dashboard_dir: Path) -> None:
         )
         if len(files) > 1:
             archive.mkdir(exist_ok=True)
-            for old_file in files[:-1]:  # 최신 1개 제외하고 이동
+            for old_file in files[:-1]:
                 try:
                     old_file.rename(archive / old_file.name)
                 except Exception:
@@ -142,7 +138,6 @@ def _load_processed() -> Set[str]:
         for line in PROCESSED_LOG.read_text(encoding='utf-8').splitlines():
             parts = line.strip().split('|')
             if len(parts) >= 2 and parts[0] == today:
-                # 경로|수정시간 또는 구버전 경로만인 경우 모두 지원
                 key = '|'.join(parts[1:])
                 result.add(key)
     except Exception:
@@ -150,14 +145,11 @@ def _load_processed() -> Set[str]:
     return result
 
 def _is_already_processed(filepath: Path, processed: Set[str]) -> bool:
-    """파일이 오늘 이미 처리됐는지 확인 (경로+수정시간 기준)"""
     try:
         mtime = int(filepath.stat().st_mtime)
         key = f"{filepath.resolve()}|{mtime}"
-        # 새 형식: 경로|수정시간
         if key in processed:
             return True
-        # 구버전 호환: 경로만
         if str(filepath.resolve()) in processed:
             return True
     except Exception:
@@ -165,7 +157,6 @@ def _is_already_processed(filepath: Path, processed: Set[str]) -> bool:
     return False
 
 def _mark_processed(filepath: Path) -> None:
-    """경로 + 파일 수정시간 기록 (같은 경로 파일 교체도 감지)"""
     today = datetime.date.today().isoformat()
     try:
         mtime = int(filepath.stat().st_mtime)
@@ -174,16 +165,38 @@ def _mark_processed(filepath: Path) -> None:
     except Exception as e:
         log.warning(f"처리 기록 저장 실패: {e}")
 
+def _cleanup_processed_log() -> None:
+    """processed.log 에서 30일 초과 항목 제거"""
+    if not PROCESSED_LOG.exists():
+        return
+    cutoff = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+    try:
+        lines = PROCESSED_LOG.read_text(encoding='utf-8').splitlines()
+        kept  = [l for l in lines if l.strip() and l.strip().split('|')[0] >= cutoff]
+        if len(kept) < len(lines):
+            PROCESSED_LOG.write_text(
+                '\n'.join(kept) + ('\n' if kept else ''), encoding='utf-8'
+            )
+    except Exception:
+        pass
+
 # ── 파일 유효성 ───────────────────────────────────────────────────────────
-def is_valid_xlsx(filepath: Path) -> bool:
-    if not filepath.is_file() or filepath.suffix.lower() != '.xlsx':
+def is_valid_excel(filepath: Path) -> bool:
+    if not filepath.is_file():
+        return False
+    ext = filepath.suffix.lower()
+    if ext not in ('.xlsx', '.xls'):
         return False
     if filepath.stat().st_size < 1024:
         return False
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
-        wb.close()
+        if ext == '.xlsx':
+            import openpyxl
+            wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+            wb.close()
+        else:
+            import xlrd
+            xlrd.open_workbook(str(filepath))
         return True
     except Exception:
         return False
@@ -193,39 +206,24 @@ def _glob_excel(folder: Path) -> list:
     """xls + xlsx 모두 탐색 (수정시간 내림차순)"""
     files = list(folder.glob('*.xlsx')) + list(folder.glob('*.xls'))
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
 def _find_latest_for_month(
     folder: Path, year: int, month: int, processed: Set[str]
 ) -> Optional[Path]:
     _, get_ym, _ = _get_process()
     candidates = [
-        f for f in sorted(folder.glob('*.xlsx'),
-                          key=lambda p: p.stat().st_mtime, reverse=True)
-        if is_valid_xlsx(f)
+        f for f in _glob_excel(folder)
+        if is_valid_excel(f)
         and not _is_already_processed(f, processed)
         and get_ym(f) == (year, month)
     ]
     return candidates[0] if candidates else None
 
-def _find_all_for_month(
-    folder: Path, year: int, month: int, processed: Set[str]
-) -> list:
-    """같은 달 미처리 파일 전부 반환 (주별 합산용, 오래된 순)"""
-    _, get_ym, _ = _get_process()
-    candidates = [
-        f for f in sorted(folder.glob('*.xlsx'),
-                          key=lambda p: p.stat().st_mtime)  # 오래된 것부터
-        if is_valid_xlsx(f)
-        and not _is_already_processed(f, processed)
-        and get_ym(f) == (year, month)
-    ]
-    return candidates
-
 def _find_any_for_month(folder: Path, year: int, month: int) -> Optional[Path]:
     _, get_ym, _ = _get_process()
     candidates = [
-        f for f in sorted(folder.glob('*.xlsx'),
-                          key=lambda p: p.stat().st_mtime, reverse=True)
-        if is_valid_xlsx(f) and get_ym(f) == (year, month)
+        f for f in _glob_excel(folder)
+        if is_valid_excel(f) and get_ym(f) == (year, month)
     ]
     return candidates[0] if candidates else None
 
@@ -233,12 +231,23 @@ def _find_all_year_months() -> list:
     _, get_ym, _ = _get_process()
     ym_set = set()
     for folder in (DATA_WEEKLY, DATA_MONTHLY):
-        for f in folder.glob('*.xlsx'):
-            if is_valid_xlsx(f):
+        for f in _glob_excel(folder):
+            if is_valid_excel(f):
                 ym = get_ym(f)
                 if ym:
                     ym_set.add(ym)
     return sorted(ym_set)
+
+def _collect_weekly_files(year: int, month: int) -> list:
+    """data/weekly/ + _done/YYYY-MM/ 에서 같은 달 파일 전부 수집 (오래된 순)"""
+    _, get_ym, _ = _get_process()
+    all_files = []
+    for search_dir in [DATA_WEEKLY, DATA_WEEKLY / '_done' / f'{year}-{month:02d}']:
+        if search_dir.exists():
+            for f in sorted(_glob_excel(search_dir), key=lambda p: p.stat().st_mtime):
+                if is_valid_excel(f) and get_ym(f) == (year, month):
+                    all_files.append(f)
+    return all_files
 
 # ── 날짜 판단 ─────────────────────────────────────────────────────────────
 def _get_today_mode(today: datetime.date) -> Optional[str]:
@@ -258,47 +267,14 @@ def _get_target_ym(today: datetime.date, mode: str) -> Tuple[int, int]:
         return prev.year, prev.month
     return today.year, today.month
 
-# ── 단일 파일 처리 (재시도 포함) ─────────────────────────────────────────
-
-def process_file(
-    filepath: Path,
-    mark: bool = True,
+# ── 출력 생성 (데이터 → Excel + HTML) ────────────────────────────────────
+def _save_outputs(
+    data: dict,
     counterpart: Optional[Path] = None,
-    retry: bool = True,
 ) -> bool:
-    """
-    filepath:    처리할 파일
-    mark:        완료 기록 여부
-    counterpart: 정합성 비교 파일
-    retry:       파일 잠김 시 30분 후 1회 재시도
-    """
-    load_and_process, _, load_and_merge = _get_process()
+    """처리된 데이터를 받아 Excel + HTML 생성 및 archive 정리"""
     generate_excel, generate_html = _get_generators()
 
-    log.info(f"처리 시작: {filepath.name}")
-
-    for attempt in range(2):  # 최대 2회 시도
-        try:
-            data = load_and_process(filepath)
-            break
-        except PermissionError as e:
-            if attempt == 0 and retry:
-                log.warning(f"파일 잠김 — 30분 후 재시도: {filepath.name}")
-                time.sleep(30 * 60)
-                continue
-            log.error(str(e))
-            return False
-        except ValueError as e:
-            log.error(f"데이터 오류: {e}")
-            return False
-        except Exception as e:
-            log.error(f"처리 실패: {filepath.name} — {e}")
-            log.debug(traceback.format_exc())
-            return False
-    else:
-        return False
-
-    # 경고 로깅
     for w in data.get('warnings', []):
         log.warning(w)
 
@@ -312,13 +288,12 @@ def process_file(
 
     # 정합성 검증
     validation_result = None
-    if counterpart and is_valid_xlsx(counterpart):
+    if counterpart and is_valid_excel(counterpart):
         try:
             load_fn, _, _ = _get_process()
             other_data = load_fn(counterpart)
             if other_data['year_month'] == (year, month):
                 from validator import validate
-                # 항상 (주별누적, 월별) 순서
                 if counterpart.parent == DATA_MONTHLY:
                     validation_result = validate(data, other_data)
                 else:
@@ -339,103 +314,98 @@ def process_file(
         log.debug(traceback.format_exc())
         return False
 
-    # 이전 결과물 archive 이동 (최신 1개 유지)
     _cleanup_old_outputs(reports_dir, dashboard_dir)
-
-    # 처리 완료 원본 파일 → data/_done/ 으로 이동
-    if mark:
-        _mark_processed(filepath)
-        _move_to_done(filepath)
-
     log.info(f"✓ 완료: {period} → output/{year}-{month:02d}/")
     return True
 
-# ── 주별 / 월별 실행 ──────────────────────────────────────────────────────
-def _merge_weekly_files(year: int, month: int) -> Optional[Path]:
+# ── 단일 파일 처리 (재시도 포함) ─────────────────────────────────────────
+def process_file(
+    filepath: Path,
+    mark: bool = True,
+    counterpart: Optional[Path] = None,
+    retry: bool = True,
+) -> bool:
     """
-    data/weekly/ 의 같은 달 파일 전부를 합산한 임시 파일 생성
-    처리 완료(_done/)된 파일 + 현재 파일 모두 포함
+    filepath:    처리할 파일
+    mark:        완료 기록 여부
+    counterpart: 정합성 비교 파일
+    retry:       파일 잠김 시 30분 후 1회 재시도
     """
-    import pandas as pd
-    import tempfile
-    _, get_ym, _ = _get_process()
+    load_and_process, _, _ = _get_process()
+    log.info(f"처리 시작: {filepath.name}")
 
-    # 현재 + _done/ 폴더에서 같은 달 파일 모두 수집
-    all_files = []
-    for search_dir in [DATA_WEEKLY, DATA_WEEKLY / '_done' / f'{year}-{month:02d}']:
-        if search_dir.exists():
-            for f in sorted(search_dir.glob('*.xlsx'), key=lambda p: p.stat().st_mtime):
-                if is_valid_xlsx(f) and get_ym(f) == (year, month):
-                    all_files.append(f)
-
-    if not all_files:
-        return None
-
-    if len(all_files) == 1:
-        return all_files[0]  # 파일 1개면 그대로 반환
-
-    # 여러 파일 합산
-    log.info(f"주별 파일 {len(all_files)}개 합산: {[f.name for f in all_files]}")
-    dfs = []
-    for f in all_files:
+    for attempt in range(2):
         try:
-            _engine = 'xlrd' if f.suffix.lower() == '.xls' else 'openpyxl'
-            dfs.append(pd.read_excel(f, sheet_name=0, engine=_engine))
+            data = load_and_process(filepath)
+            break
+        except PermissionError as e:
+            if attempt == 0 and retry:
+                log.warning(f"파일 잠김 — 30분 후 재시도: {filepath.name}")
+                time.sleep(30 * 60)
+                continue
+            log.error(str(e))
+            return False
+        except ValueError as e:
+            log.error(f"데이터 오류: {e}")
+            return False
         except Exception as e:
-            log.warning(f"합산 중 파일 읽기 실패 (스킵): {f.name} — {e}")
+            log.error(f"처리 실패: {filepath.name} — {e}")
+            log.debug(traceback.format_exc())
+            return False
+    else:
+        return False
 
-    if not dfs:
-        return None
+    ok = _save_outputs(data, counterpart=counterpart)
+    if ok and mark:
+        _mark_processed(filepath)
+        _move_to_done(filepath)
+    return ok
 
-    merged = pd.concat(dfs, ignore_index=True)
-
-    # 임시 파일로 저장 (처리 후 자동 삭제)
-    tmp = tempfile.NamedTemporaryFile(
-        suffix='.xlsx', delete=False,
-        dir=DATA_WEEKLY,
-        prefix=f'_merged_{year}{month:02d}_'
-    )
-    tmp.close()
-    tmp_path = Path(tmp.name)
-    try:
-        merged.to_excel(tmp_path, index=False)
-    except Exception:
-        try:
-            tmp_path.unlink()
-        except Exception:
-            pass
-        raise
-    return tmp_path
-
-
+# ── 주별 / 월별 실행 ──────────────────────────────────────────────────────
 def _run_weekly(year: int, month: int, processed: Set[str], mark: bool = True) -> None:
     log.info(f"=== 주별 집계 {year}-{month:02d} ===")
 
-    # 새로 추가된 파일이 있는지 확인
     new_fp = _find_latest_for_month(DATA_WEEKLY, year, month, processed)
     if not new_fp:
         log.info("새로 처리할 파일 없음 (없거나 이미 처리됨)")
         return
 
-    # 같은 달 전체 파일 합산 (누적 리포트)
-    merged_fp = _merge_weekly_files(year, month)
-    is_temp = merged_fp is not None and merged_fp.name.startswith('_merged_')
+    all_files = _collect_weekly_files(year, month)
+    if not all_files:
+        all_files = [new_fp]
 
-    try:
-        target_fp = merged_fp if merged_fp else new_fp
-        counterpart = _find_any_for_month(DATA_MONTHLY, year, month)
-        # 합산 파일은 mark/move 하지 않고 새 파일(new_fp)만 기록/이동
-        ok = process_file(target_fp, mark=False, counterpart=counterpart)
-        if ok and mark:
-            _mark_processed(new_fp)
-            _move_to_done(new_fp)
-    finally:
-        # 임시 합산 파일 삭제
-        if is_temp and merged_fp and merged_fp.exists():
-            try:
-                merged_fp.unlink()
-            except Exception:
-                pass
+    counterpart = _find_any_for_month(DATA_MONTHLY, year, month)
+    load_and_process, _, load_and_merge = _get_process()
+
+    log.info(f"주별 파일 {len(all_files)}개 합산: {[f.name for f in all_files]}"
+             if len(all_files) > 1 else f"주별 파일: {all_files[0].name}")
+
+    for attempt in range(2):
+        try:
+            data = load_and_merge(all_files) if len(all_files) > 1 \
+                   else load_and_process(all_files[0])
+            break
+        except PermissionError as e:
+            if attempt == 0:
+                log.warning(f"파일 잠김 — 30분 후 재시도")
+                time.sleep(30 * 60)
+                continue
+            log.error(str(e))
+            return
+        except ValueError as e:
+            log.error(f"데이터 오류: {e}")
+            return
+        except Exception as e:
+            log.error(f"처리 실패: {e}")
+            log.debug(traceback.format_exc())
+            return
+    else:
+        return
+
+    ok = _save_outputs(data, counterpart=counterpart)
+    if ok and mark:
+        _mark_processed(new_fp)
+        _move_to_done(new_fp)
 
 def _run_monthly(year: int, month: int, processed: Set[str], mark: bool = True) -> None:
     log.info(f"=== 월별 집계 {year}-{month:02d} ===")
@@ -495,7 +465,7 @@ def run_validate_only() -> None:
         return
 
     try:
-        load_and_process, _, load_and_merge = _get_process()
+        load_and_process, _, _ = _get_process()
         from validator import validate, add_validation_sheet
         import openpyxl
 
@@ -550,9 +520,9 @@ def run_schedule_mode() -> None:
 
 # ── 메인 ──────────────────────────────────────────────────────────────────
 def main() -> None:
-    # 데이터 폴더 없으면 자동 생성
     DATA_WEEKLY.mkdir(parents=True, exist_ok=True)
     DATA_MONTHLY.mkdir(parents=True, exist_ok=True)
+    _cleanup_processed_log()
 
     args = sys.argv[1:]
 
@@ -561,13 +531,11 @@ def main() -> None:
     elif '--validate' in args:
         run_validate_only()
     elif '--weekly' in args:
-        # GUI 주별 버튼용: 오늘 기준 or 가장 최근 연월 주별 처리
         today = datetime.date.today()
         ym_list = _find_all_year_months()
         year, month = ym_list[-1] if ym_list else (today.year, today.month)
         _run_weekly(year, month, set(), mark=True)
     elif '--monthly' in args:
-        # GUI 월별 버튼용: 오늘 기준 or 가장 최근 연월 월별 처리
         today = datetime.date.today()
         ym_list = _find_all_year_months()
         year, month = ym_list[-1] if ym_list else (today.year, today.month)
@@ -576,7 +544,7 @@ def main() -> None:
         remaining = [a for a in args if a != '--force']
         if remaining:
             fp = Path(remaining[0])
-            if not is_valid_xlsx(fp):
+            if not is_valid_excel(fp):
                 log.error(f"유효하지 않은 파일: {fp}")
                 sys.exit(1)
             process_file(fp, mark=False)
@@ -584,7 +552,7 @@ def main() -> None:
             run_auto(force=True)
     elif args and not args[0].startswith('--'):
         fp = Path(args[0])
-        if not is_valid_xlsx(fp):
+        if not is_valid_excel(fp):
             log.error(f"유효하지 않은 파일: {fp}")
             sys.exit(1)
         process_file(fp)

@@ -1,9 +1,9 @@
-from __future__ import annotations
-from typing import Optional, Union
 """
 excel_report.py — Excel 리포트 생성
 process.py의 load_and_process() 결과를 받아 xlsx 생성
 """
+from __future__ import annotations
+from typing import Optional, Union
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from pathlib import Path

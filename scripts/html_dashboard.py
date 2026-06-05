@@ -1,9 +1,9 @@
-from __future__ import annotations
-from typing import Optional, Union
 """
 html_dashboard.py — HTML 대시보드 생성
 process.py의 load_and_process() 결과를 받아 HTML 파일 생성
 """
+from __future__ import annotations
+from typing import Optional, Union
 import json
 from pathlib import Path
 
