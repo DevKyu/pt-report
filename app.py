@@ -448,11 +448,8 @@ class PTApp:
 
     # ── 스케줄러 자동 등록 (첫 실행 시) ──────────────────────────────────
     def _auto_register(self):
-        """
-        스케줄러 등록 여부 확인 후 미등록이면 등록 — PowerShell 1회 호출로 처리.
-        창이 뜨지 않도록 CREATE_NO_WINDOW 플래그 사용.
-        """
-        self._do_register()
+        """백그라운드 스레드에서 실행 — 메인 스레드 블로킹 방지"""
+        threading.Thread(target=self._do_register, daemon=True).start()
 
     def _do_register(self):
         vbs = ROOT / 'run_silent.vbs'
@@ -502,16 +499,16 @@ $sc.Save()
             )
             ok = result.returncode == 0
             if ok:
-                self._logwrite('✓ 스케줄 등록 완료', 'ok')
+                self._q.put(('log', 'ok', '✓ 스케줄 등록 완료'))
         except Exception as e:
-            self._logwrite(f'스케줄 등록 오류: {e}', 'err')
+            self._q.put(('log', 'err', f'스케줄 등록 오류: {e}'))
         finally:
             try:
                 ps_file.unlink()
             except Exception:
                 pass
         if not ok:
-            self._logwrite('⚠ 스케줄 등록 실패', 'warn')
+            self._q.put(('log', 'warn', '⚠ 스케줄 등록 실패'))
 
     def run(self):
         self._logwrite(
