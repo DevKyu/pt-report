@@ -5,7 +5,9 @@ Python 3.8+ 호환
 from __future__ import annotations
 import pandas as pd
 import datetime
+import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -106,7 +108,9 @@ def detect_doctor_name_issues(df: pd.DataFrame) -> List[str]:
 
     for doc in doctors:
         normalized = _normalize_doctor(doc)
-        if doc != normalized:
+        if normalized == '':
+            warnings.append(f"처방의명이 공백뿐인 행 발견 → 집계에서 제외됨 (원본: '{doc}')")
+        elif doc != normalized:
             warnings.append(f"처방의명 공백 이슈: '{doc}' → '{normalized}' 로 처리됨")
 
     normalized_docs = [_normalize_doctor(d) for d in doctors]
@@ -136,15 +140,88 @@ def _edit_distance(a: str, b: str) -> int:
                     1 + min(prev[j], dp[j-1], prev[j-1])
     return dp[n]
 
+# ── 처방의 표시 순서 / 별칭 설정 ────────────────────────────────────────────
+DEFAULT_DOCTOR_ORDER = [
+    '김기택', '신재흥', '조명국', '이인수', '김범석',
+    '강영훈', '홍태민', '김용찬', '서광욱',
+]
+
+def _project_root() -> Path:
+    """exe(번들)/스크립트 실행 모두에서 실제 설치 경로(루트)를 반환"""
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+def get_doctor_config_path() -> Path:
+    return _project_root() / 'doctor_settings.json'
+
+def load_doctor_config() -> List[Dict[str, str]]:
+    """
+    처방의 표시 순서/별칭 설정 로드 → [{'name': 원본명, 'alias': 별칭}, ...]
+    파일이 없으면 DEFAULT_DOCTOR_ORDER 기준으로 새로 생성
+    """
+    path = get_doctor_config_path()
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+            return [
+                {'name': item['name'], 'alias': item.get('alias', '')}
+                for item in raw if item.get('name')
+            ]
+        except Exception:
+            pass
+    config = [{'name': n, 'alias': ''} for n in DEFAULT_DOCTOR_ORDER]
+    save_doctor_config(config)
+    return config
+
+def save_doctor_config(config: List[Dict[str, str]]) -> None:
+    path = get_doctor_config_path()
+    path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8'
+    )
+
+def _apply_doctor_order(dedup: pd.DataFrame) -> pd.DataFrame:
+    """
+    설정 파일 기준으로 처방의 별칭을 적용하고 표시 순서(Categorical)를 부여한다.
+    설정에 없는 새 이름은 가나다순으로 뒤에 추가하고 설정 파일에도 반영한다.
+    """
+    dedup = dedup.copy()
+    config = load_doctor_config()
+    alias_map = {e['name']: e['alias'] for e in config if e.get('alias')}
+    if alias_map:
+        dedup['처방의'] = dedup['처방의'].replace(alias_map)
+
+    # 처방의 값이 빈 문자열인 행은 집계에서 제외 (공백 셀 등 — 정합성 검증에서 차이로 드러남)
+    dedup = dedup[dedup['처방의'] != '']
+
+    known: List[str] = []
+    seen = set()
+    for e in config:
+        disp = e.get('alias') or e['name']
+        if disp not in seen:
+            seen.add(disp)
+            known.append(disp)
+
+    present = sorted(dedup['처방의'].unique().tolist())
+    new_names = sorted(set(present) - seen)
+    if new_names:
+        save_doctor_config(config + [{'name': n, 'alias': ''} for n in new_names])
+        known = known + new_names
+
+    dedup['처방의'] = pd.Categorical(dedup['처방의'], categories=known, ordered=True)
+    return dedup
+
 # ── 공통 집계 ─────────────────────────────────────────────────────────────
 def _aggregate(dedup: pd.DataFrame) -> Dict[str, Any]:
     """중복 제거된 DataFrame에서 일별/주별/요약 집계 수행"""
+    dedup = _apply_doctor_order(dedup)
+
     min_date: datetime.date = dedup['접수일자'].min()
     year_month: Tuple[int, int] = (min_date.year, min_date.month)
     period: str = f"{min_date.strftime('%Y년 %m월')} 집계"
 
     daily = (
-        dedup.groupby(['처방의', '접수일자', '구분'])
+        dedup.groupby(['처방의', '접수일자', '구분'], observed=True)
         .size().unstack(fill_value=0).reset_index()
     )
     daily.columns.name = None
@@ -161,13 +238,13 @@ def _aggregate(dedup: pd.DataFrame) -> Dict[str, Any]:
     ))
 
     weekly = (
-        daily.groupby(['처방의', '주차'])
+        daily.groupby(['처방의', '주차'], observed=True)
         .agg(입원=('입원', 'sum'), 외래=('외래', 'sum'), 합계=('합계', 'sum'))
         .reset_index()
     )
 
     summary = (
-        dedup.groupby(['처방의', '구분'])
+        dedup.groupby(['처방의', '구분'], observed=True)
         .size().unstack(fill_value=0).reset_index()
     )
     summary.columns.name = None

@@ -70,6 +70,7 @@ if not exist "%DIST%\output"       mkdir "%DIST%\output"
 copy "%DIR%\run_silent.vbs" "%DIST%\" >nul
 copy "%DIR%\README.txt"     "%DIST%\" >nul
 copy "%DIR%\uninstall.bat"  "%DIST%\" >nul
+if exist "%DIR%\doctor_settings.json" copy "%DIR%\doctor_settings.json" "%DIST%\" >nul
 echo Done.
 echo.
 

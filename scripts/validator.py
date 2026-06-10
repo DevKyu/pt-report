@@ -24,8 +24,13 @@ def validate(weekly_data: Dict[str, Any], monthly_data: Dict[str, Any]) -> Dict[
     """
     w_sum = weekly_data['summary'].copy()
     m_sum = monthly_data['summary'].copy()
+    w_sum['처방의'] = w_sum['처방의'].astype(str)
+    m_sum['처방의'] = m_sum['처방의'].astype(str)
 
-    all_docs = sorted(set(w_sum['처방의'].tolist() + m_sum['처방의'].tolist()))
+    present    = set(w_sum['처방의']) | set(m_sum['처방의'])
+    order_keys = monthly_data.get('docs') or weekly_data.get('docs') or []
+    all_docs   = [d for d in order_keys if d in present]
+    all_docs  += sorted(present - set(all_docs))
 
     summary_rows: List[Dict] = []
     for doc in all_docs:
@@ -47,6 +52,8 @@ def validate(weekly_data: Dict[str, Any], monthly_data: Dict[str, Any]) -> Dict[
     # 일별 상세 비교
     w_daily = weekly_data['daily'][['처방의','접수일자','입원','외래','합계']].copy()
     m_daily = monthly_data['daily'][['처방의','접수일자','입원','외래','합계']].copy()
+    w_daily['처방의']   = w_daily['처방의'].astype(str)
+    m_daily['처방의']   = m_daily['처방의'].astype(str)
     w_daily['접수일자'] = w_daily['접수일자'].astype(str)
     m_daily['접수일자'] = m_daily['접수일자'].astype(str)
 

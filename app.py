@@ -16,7 +16,7 @@ import subprocess
 import logging
 import logging.handlers
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog, ttk
 from pathlib import Path
 
 # ── 경로 설정 (exe/py 모두 대응) ─────────────────────────────────────────
@@ -129,6 +129,8 @@ class PTApp:
                  font=FTITLE, bg=C['primary'], fg='white').pack()
         tk.Label(hdr, text='처방 데이터 집계  ·  Excel + 대시보드 자동 생성',
                  font=FS, bg=C['primary'], fg='#93B8D8').pack()
+        self._mkbtn(hdr, '⚙ 설정', self._open_doctor_settings,
+                    C['btn_dim']).place(relx=1.0, rely=0.5, x=-12, anchor='e')
 
         body = tk.Frame(r, bg=C['bg'], padx=14, pady=12)
         body.pack(fill='both', expand=True)
@@ -447,6 +449,157 @@ class PTApp:
         self._log_txt.config(state='normal')
         self._log_txt.delete('1.0', 'end')
         self._log_txt.config(state='disabled')
+
+    # ── 처방의 순서 / 별칭 설정 ──────────────────────────────────────────
+    def _open_doctor_settings(self):
+        import process
+        config = [dict(e) for e in process.load_doctor_config()]
+
+        win = tk.Toplevel(self.root)
+        win.title('처방의 순서 / 별칭 설정')
+        win.configure(bg=C['bg'])
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text='처방의 순서 / 별칭 설정', font=FTITLE,
+                 bg=C['bg'], fg=C['primary']).pack(padx=14, pady=(14, 4), anchor='w')
+        tk.Label(win,
+                 text='▲▼ 버튼으로 Excel·대시보드에 표시될 순서를 바꾸고,\n'
+                      '별칭 칸을 더블클릭해 표시 이름을 따로 지정할 수 있습니다.\n'
+                      '별칭을 비워두면 원래 이름 그대로 표시됩니다.',
+                 font=FS, bg=C['bg'], fg=C['muted'], justify='left'
+                 ).pack(padx=14, anchor='w', pady=(0, 8))
+
+        body = tk.Frame(win, bg=C['bg'], padx=14)
+        body.pack(fill='both', expand=True)
+
+        style = ttk.Style(win)
+        try:
+            style.configure('PT.Treeview', font=F, rowheight=26)
+            style.configure('PT.Treeview.Heading', font=FB)
+        except Exception:
+            pass
+
+        tree = ttk.Treeview(body, columns=('name', 'alias'), show='headings',
+                             height=min(max(len(config), 6), 14),
+                             style='PT.Treeview', selectmode='browse')
+        tree.heading('name', text='처방의')
+        tree.heading('alias', text='별칭 (더블클릭하여 편집)')
+        tree.column('name', width=140, anchor='w')
+        tree.column('alias', width=210, anchor='w')
+        tree.pack(side='left', fill='both', expand=True)
+
+        sb = ttk.Scrollbar(body, orient='vertical', command=tree.yview)
+        sb.pack(side='left', fill='y')
+        tree.configure(yscrollcommand=sb.set)
+
+        def _populate(select_idx=None):
+            tree.delete(*tree.get_children())
+            for e in config:
+                tree.insert('', 'end', values=(e['name'], e.get('alias', '') or '—'))
+            children = tree.get_children()
+            if select_idx is not None and children:
+                idx = max(0, min(select_idx, len(children) - 1))
+                tree.selection_set(children[idx])
+                tree.focus(children[idx])
+
+        _populate()
+
+        def _selected_index():
+            sel = tree.selection()
+            return tree.index(sel[0]) if sel else None
+
+        def _move(delta):
+            idx = _selected_index()
+            if idx is None:
+                return
+            new_idx = idx + delta
+            if 0 <= new_idx < len(config):
+                config[idx], config[new_idx] = config[new_idx], config[idx]
+                _populate(new_idx)
+
+        def _edit_alias(event=None):
+            idx = _selected_index()
+            if idx is None:
+                return
+            cur = config[idx].get('alias', '')
+            new_alias = simpledialog.askstring(
+                '별칭 설정',
+                f"'{config[idx]['name']}'의 별칭을 입력하세요.\n(비워두면 원래 이름으로 표시)",
+                initialvalue=cur, parent=win)
+            if new_alias is None:
+                return
+            new_alias = new_alias.strip()
+            if new_alias == config[idx]['name']:
+                new_alias = ''  # 원래 이름과 같으면 별칭 없음과 동일하게 처리
+            display = new_alias or config[idx]['name']
+            for j, e in enumerate(config):
+                if j == idx:
+                    continue
+                if display in (e['name'], e.get('alias') or e['name']):
+                    messagebox.showwarning(
+                        '중복된 이름',
+                        f"'{display}' 은(는) 이미 다른 처방의({e['name']})의\n"
+                        f"이름 또는 별칭으로 사용 중입니다. 다른 이름을 입력하세요.",
+                        parent=win)
+                    return
+            config[idx]['alias'] = new_alias
+            _populate(idx)
+
+        def _add_doctor():
+            name = simpledialog.askstring('처방의 추가', '추가할 처방의 이름을 입력하세요.',
+                                           parent=win)
+            if not name:
+                return
+            name = ' '.join(name.split())
+            if not name:
+                return
+            existing = {e['name'] for e in config} | \
+                       {e['alias'] for e in config if e.get('alias')}
+            if name in existing:
+                messagebox.showwarning('중복', f"'{name}' 은(는) 이미 목록에 있습니다.",
+                                        parent=win)
+                return
+            config.append({'name': name, 'alias': ''})
+            _populate(len(config) - 1)
+
+        def _remove_doctor():
+            idx = _selected_index()
+            if idx is None:
+                return
+            name = config[idx]['name']
+            if not messagebox.askyesno(
+                    '삭제 확인',
+                    f"'{name}' 항목을 목록에서 삭제할까요?\n"
+                    f"(이후 데이터에 다시 나타나면 맨 뒤에 자동으로 추가됩니다)",
+                    parent=win):
+                return
+            del config[idx]
+            _populate(min(idx, len(config) - 1))
+
+        tree.bind('<Double-1>', _edit_alias)
+
+        btn1 = tk.Frame(win, bg=C['bg'], padx=14, pady=4)
+        btn1.pack(fill='x', pady=(4, 0))
+        self._mkbtn(btn1, '▲ 위로', lambda: _move(-1), C['btn_dim']).pack(side='left')
+        self._mkbtn(btn1, '▼ 아래로', lambda: _move(1), C['btn_dim']).pack(side='left', padx=4)
+        self._mkbtn(btn1, '별칭 편집', _edit_alias, C['btn_dim']).pack(side='left', padx=4)
+        self._mkbtn(btn1, '추가', _add_doctor, C['btn_dim']).pack(side='left', padx=4)
+        self._mkbtn(btn1, '삭제', _remove_doctor, C['btn_dim']).pack(side='left', padx=4)
+
+        btn2 = tk.Frame(win, bg=C['bg'], padx=14, pady=4)
+        btn2.pack(fill='x', pady=(0, 10))
+
+        def _save():
+            process.save_doctor_config(config)
+            messagebox.showinfo('저장 완료',
+                                 '처방의 순서/별칭 설정을 저장했습니다.\n'
+                                 '다음 집계 실행부터 적용됩니다.', parent=win)
+            win.destroy()
+
+        self._mkbtn(btn2, '저장', _save, C['btn_res']).pack(side='right')
+        self._mkbtn(btn2, '취소', win.destroy, C['btn_dim']).pack(side='right', padx=(0, 4))
 
     # ── 스케줄러 자동 등록 (첫 실행 시) ──────────────────────────────────
     def _auto_register(self):
